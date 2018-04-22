@@ -1,0 +1,505 @@
+import { decode as lz4_decode } from './lz4.js';
+
+type returnType = [number, null | undefined | number | string | boolean | Uint8Array | Date | [number, Uint8Array] | Uint16Array | Map<any, any> | any[]];
+type returnTypeShallow = null | undefined | number | string | boolean | Uint8Array | Map<Uint8Array, Uint8Array> | Uint8Array[];
+
+const _static_float64_typed_array = new Float64Array(1);
+const _static_u8_typed_array = new Uint8Array(_static_float64_typed_array.buffer);
+const _static_i8_typed_array = new Int8Array(_static_float64_typed_array.buffer);
+const _static_i16_typed_array = new Int16Array(_static_float64_typed_array.buffer);
+const _static_i32_typed_array = new Int32Array(_static_float64_typed_array.buffer);
+function get16bit(buf: Uint8Array, index: number): number {
+    return (buf[index++] << 8) + buf[index];
+}
+function get32bit(buf: Uint8Array, index: number): number {
+    return (buf[index++] << 24) + (buf[index++] << 16) + (buf[index++] << 8) + buf[index];
+}
+
+export function decodeBinaryNullable(buf: Uint8Array): [number, Uint8Array | null] {
+    switch (buf[0]) {
+        case 0xc0: return [1, null];
+        case 0xc4:
+            const len8 = buf[1];
+            return [2 + len8, buf.subarray(2, len8)];
+        case 0xc5:
+            const len16 = (buf[0] << 8) | buf[1];
+            return [3 + len16, buf.subarray(3, len16)];
+        case 0xc6:
+            const len32 = (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3];
+        default: return [0, null];
+    }
+}
+
+export function decodeNumberNullable(buf: Uint8Array): [number, number | null] {
+    const firstByte = buf[0];
+    const stat = _static_u8_typed_array;
+    if (firstByte <= 127) return [1, firstByte];
+    if (firstByte >= 224) return [1, firstByte - 256];
+    switch (firstByte) {
+        case 0xc0: return [1, null];
+        case 0xcc: return [2, buf[1]];
+        case 0xcd: return [3, (buf[1] << 8) | buf[2]];
+        case 0xce: return [5, (buf[1] << 24) | (buf[2] << 16) | (buf[3] << 8) | buf[4]];
+        case 0xcf: return [9, (buf[5] << 24) | (buf[6] << 16) | (buf[7] << 8) | buf[8]];
+        case 0xd0:
+            stat[0] = buf[1];
+            return [2, _static_i8_typed_array[0]];
+        case 0xd1:
+            stat[0] = buf[2];
+            stat[1] = buf[1];
+            return [3, _static_i16_typed_array[0]];
+        case 0xd2:
+            stat[0] = buf[4];
+            stat[1] = buf[3];
+            stat[2] = buf[2];
+            stat[3] = buf[1];
+            return [5, _static_i32_typed_array[0]];
+        case 0xd3:
+            return [9, null];
+    }
+    return [0, null];
+}
+
+export function decodeStringNullable(buf: Uint8Array): [number, string | null] {
+    const firstByte = buf[0];
+    const dec = utf8.decode;
+    if (firstByte >= 160 && firstByte < 192) {
+        const strLen0 = 0x1f & firstByte;
+        return [1 + strLen0, dec(buf.subarray(1, 1 + strLen0))];
+    }
+    switch (firstByte) {
+        case 0xc0: [1, null];
+        case 0xd9:
+            const strLen1 = buf[1];
+            return [strLen1 + 2, dec(buf.subarray(2, strLen1))];
+        case 0xda:
+            const strLen2 = (buf[1] << 8) | buf[2];
+            return [strLen2 + 3, dec(buf.subarray(3, strLen2))];
+        case 0xdb:
+            const strLen3 = (buf[1] << 24) | (buf[2] << 16) | (buf[3] << 8) | buf[4];
+            return [strLen3 + 5, dec(buf.subarray(5, strLen3))];
+    }
+    return [0, null];
+}
+
+export function decodeBooleanNullable(buf: Uint8Array): [number, boolean | null] {
+    const firstByte = buf[0];
+    if (0xc0 === firstByte) return [1, null];
+    else if (0xc2 === firstByte) return [1, false];
+    else if (0xc3 === firstByte) return [1, true];
+    return [0, null];
+}
+
+export function decodeFloatNullable(buf: Uint8Array): [number, number | null] {
+    const firstByte = buf[0];
+    switch (firstByte) {
+        case 0xc0: return [1, null];
+        case 0xca: return dF32(buf, 1);
+        case 0xcb: return dF64(buf, 1);
+    }
+    return [0, null];
+}
+
+export function decodeArrayNullable(buf: Uint8Array): [number, Uint8Array[] | null] {
+    const firstByte = buf[0];
+    if (firstByte === 0xc0) return [1, null];
+    let arrayCount;
+    let answer;
+    if (firstByte >= 0x90 && firstByte < 0xa0) {
+        arrayCount = firstByte & 15;
+        answer = 1;
+    }
+    else if (firstByte === 0xdc) {
+        arrayCount = (buf[1] << 8) | buf[2];
+        answer = 3;
+    }
+    else if (firstByte === 0xdd) {
+        arrayCount = (buf[1] << 24) | (buf[2] << 16) | (buf[3] << 8) | buf[4];
+        answer = 5;
+    }
+    else return [0, null];
+    const array: Uint8Array[] = [];
+    for (let i = 0; i < arrayCount; i++) {
+        const len = getLength[buf[answer]](buf, answer);
+        array.push(buf.subarray(answer, answer + len));
+        answer += len;
+    }
+    return [answer, array];
+}
+
+function dBin16(buf: Uint8Array, index: number): [number, Uint8Array] {
+    const bin16length = get16bit(buf, index);
+    return [3 + bin16length, buf.subarray(index + 2, index + 2 + bin16length)];
+}
+function dBin32(buf: Uint8Array, index: number): [number, Uint8Array] {
+    const bin32length = get32bit(buf, index);
+    return [5 + bin32length, buf.subarray(index + 4, index + 4 + bin32length)];
+}
+function dExt8(buf: Uint8Array, index: number): [number, [number, Uint8Array]] {
+    const ext8length = buf[index++];
+    return [3 + ext8length, [buf[index++], buf.subarray(index, index + ext8length)]];
+}
+function dExt16(buf: Uint8Array, index: number): [number, [number, Uint8Array]] {
+    const ext16length = get16bit(buf, index);
+    index += 2;
+    return [4 + ext16length, [buf[index++], buf.subarray(index, index + ext16length)]];
+}
+function dExt32(buf: Uint8Array, index: number): [number, [number, Uint8Array]] {
+    const ext32length = get32bit(buf, index);
+    index += 4;
+    return [6 + ext32length, [buf[index++], buf.subarray(index, index + ext32length)]];
+}
+function dI8(buf: Uint8Array, index: number): [number, number] {
+    _static_u8_typed_array[0] = buf[index];
+    return [2, _static_i8_typed_array[0]];
+}
+function dI16(buf: Uint8Array, index: number): [number, number] {
+    const u8 = _static_u8_typed_array;
+    u8[1] = buf[index++];
+    u8[0] = buf[index];
+    return [3, _static_i16_typed_array[0]];
+}
+function dI32(buf: Uint8Array, index: number): [number, number] {
+    const u8 = _static_u8_typed_array;
+    u8[3] = buf[index++];
+    u8[2] = buf[index++];
+    u8[1] = buf[index++];
+    u8[0] = buf[index];
+    return [5, _static_i32_typed_array[0]];
+}
+function dF32(buf: Uint8Array, index: number): [number, number] {
+    const isNegative: number = buf[index] & 0x80;
+    const exponent: number = (((buf[index++] & 0x7f) << 1) | (buf[index] >> 7)) + 896;
+    const fraction: number = ((buf[index++] & 0x7f) << 16) + (buf[index++] << 8) + buf[index];
+    const u8 = _static_u8_typed_array;
+    u8[7] = exponent >> 4 | isNegative;
+    u8[6] = (exponent & 0xf) << 4;
+    u8[6] |= fraction >> 19;
+    u8[5] = (fraction >> 11) & 0xff;
+    u8[4] = (fraction >> 3) & 0xff;
+    u8[3] = (fraction & 7) << 5;
+    u8[2] = u8[1] = u8[0] = 0;
+    return [5, _static_float64_typed_array[0]];
+}
+function dF64(buf: Uint8Array, index: number): [number, number] {
+    const u8 = _static_u8_typed_array;
+    u8[7] = buf[index++];
+    u8[6] = buf[index++];
+    u8[5] = buf[index++];
+    u8[4] = buf[index++];
+    u8[3] = buf[index++];
+    u8[2] = buf[index++];
+    u8[1] = buf[index++];
+    u8[0] = buf[index++];
+    return [9, _static_float64_typed_array[0]];
+}
+function dDateShort(buf: Uint8Array, index: number): [number, Date] {
+    return [6, new Date(((buf[index++] << 24) + (buf[index++] << 16) + (buf[index++] << 8) + buf[index]) * 1000)];
+}
+const utf8 = new TextDecoder();
+function dString8(buf: Uint8Array, index: number): [number, string] {
+    const strLen1 = buf[index++];
+    return [2 + strLen1, utf8.decode(buf.subarray(index, index + strLen1))];
+}
+function dString16(buf: Uint8Array, index: number): [number, string] {
+    const strLen2 = get16bit(buf, index);
+    return [strLen2 + 3, utf8.decode(buf.subarray(index + 2, index + 2 + strLen2))];
+}
+function dString32(buf: Uint8Array, index: number): [number, string] {
+    const strLen3 = get32bit(buf, index);
+    return [strLen3 + 5, utf8.decode(buf.subarray(index + 4, index + 4 + strLen3))];
+}
+function dA16(buf: Uint8Array, index: number): [number, any[]] {
+    const array16length = get16bit(buf, index);
+    const ans16array: any[] = [];
+    let length16array = 2;
+    for (let i = 0; i < array16length; ++i) {
+        const [_, element] = decode(buf, index + length16array);
+        length16array += _;
+        ans16array.push(element);
+    }
+    return [length16array + 3, ans16array];
+}
+function dA32(buf: Uint8Array, index: number): [number, any[]] {
+    const array32length = get32bit(buf, index);
+    const ans32array: any[] = [];
+    let length32array = 4;
+    for (let i = 0; i < array32length; i) {
+        const [_, element] = decode(buf, index + length32array);
+        length32array += _;
+        ans32array.push(element);
+    }
+    return [length32array + 5, ans32array];
+}
+function dM16(buf: Uint8Array, index: number): [number, Map<any, any>] {
+    const map16length = get16bit(buf, index);
+    const ans16map = new Map<any, any>();
+    let length16map = 2;
+    for (let i = 0; i < map16length; ++i) {
+        const [_1, _key] = decode(buf, index + length16map);
+        length16map += _1;
+        const [_2, _value] = decode(buf, index + length16map);
+        length16map += _2;
+        ans16map.set(_key, _value);
+    }
+    return [3 + length16map, ans16map];
+}
+function dM32(buf: Uint8Array, index: number): [number, Map<any, any>] {
+    const map32length = get32bit(buf, index);
+    const ans32map = new Map<any, any>();
+    let length32map = 4;
+    for (let i = 0; i < map32length; ++i) {
+        const [_1, _key] = decode(buf, index + length32map);
+        length32map += _1;
+        const [_2, _value] = decode(buf, index + length32map);
+        length32map += _2;
+        ans32map.set(_key, _value);
+    }
+    return [5 + length32map, ans32map];
+}
+
+function re1(buf: Uint8Array, index: number): number { return 1; }
+function re2(buf: Uint8Array, index: number): number { return 2; }
+function re3(buf: Uint8Array, index: number): number { return 3; }
+function re4(buf: Uint8Array, index: number): number { return 4; }
+function re6(buf: Uint8Array, index: number): number { return 6; }
+function re5(buf: Uint8Array, index: number): number { return 5; }
+function re9(buf: Uint8Array, index: number): number { return 9; }
+function re10(buf: Uint8Array, index: number): number { return 10; }
+function re18(buf: Uint8Array, index: number): number { return 18; }
+function fi1(buf: Uint8Array, index: number): number { return 1 + (buf[index + 1] & 0xf); }
+function fi2(buf: Uint8Array, index: number): number { return 1 + (buf[index + 1] & 0x1f); }
+function bi2(buf: Uint8Array, index: number): number { return 2 + buf[index + 1]; }
+function bi3(buf: Uint8Array, index: number): number { return 3 + get16bit(buf, index + 1); }
+function ar3(buf: Uint8Array, index: number): number {
+    const gl = getLength;
+    const startIndex = index++;
+    const loopCount = get16bit(buf, index);
+    index += 2;
+    for (let i = 0; i < loopCount; ++i)
+        index += gl[buf[index]](buf, index);
+    return index - startIndex;
+}
+function ar5(buf: Uint8Array, index: number): number {
+    const gl = getLength;
+    const startIndex = index++;
+    const loopCount = get32bit(buf, index);
+    index += 4;
+    for (let i = 0; i < loopCount; ++i)
+        index += gl[buf[index]](buf, index);
+    return index - startIndex;
+}
+function ma3(buf: Uint8Array, index: number): number {
+    const gl = getLength;
+    const startIndex = index++;
+    const loopCount = get16bit(buf, index);
+    index += 2;
+    for (let i = 0; i < loopCount; ++i) {
+        index += gl[buf[index]](buf, index);
+        index += gl[buf[index]](buf, index);
+    }
+    return index - startIndex;
+}
+function ma5(buf: Uint8Array, index: number): number {
+    const gl = getLength;
+    const startIndex = index++;
+    const loopCount = get32bit(buf, index);
+    index += 4;
+    for (let i = 0; i < loopCount; ++i) {
+        index += gl[buf[index]](buf, index);
+        index += gl[buf[index]](buf, index);
+    }
+    return index - startIndex;
+}
+function bi5(buf: Uint8Array, index: number): number { return 5 + get32bit(buf, index + 1); }
+export const getLength: ReadonlyArray<((buf: Uint8Array, index: number) => number)> = [
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//0
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//1
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//2
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//3
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//4
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//5
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//6
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//7
+    fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1,//8
+    fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1, fi1,//9
+    fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2,//a
+    fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2, fi2,//b
+    re1, re1, re1, re1, bi2, bi3, bi5, (buf: Uint8Array, index: number) => buf[index + 1] + 3, (buf: Uint8Array, index: number) => get16bit(buf, index + 1) + 4, (buf: Uint8Array, index: number) => get32bit(buf, index + 1) + 6, re5, re9, re2, re3, re5, re9,//c
+    re2, re3, re5, re9, re3, re4, re6, re10, re18, bi2, bi3, bi5, ar3, ar5, ma3, ma5,//d
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//e
+    re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1, re1,//f
+];
+function shallowDecodeMap(buf: Uint8Array, index: number, count: number, sul: (_index: number, _length: number) => Uint8Array): Map<Uint8Array, Uint8Array> {
+    const answer = new Map<Uint8Array, Uint8Array>();
+    const g = getLength;
+    const gl = () => g[buf[index]](buf, index);
+    for (let i = 0; i < count; ++i) {
+        const _k = sul(index, index + gl());
+        index += _k.length;
+        const _v = sul(index, index + gl());
+        index += _v.length;
+        answer.set(_k, _v);
+    }
+    return answer;
+}
+function shallowDecodeArray(buf: Uint8Array, index: number, count: number, sul: (_index: number, _length: number) => Uint8Array): Uint8Array[] {
+    const answer: Uint8Array[] = [];
+    const g = getLength;
+    const gl = () => g[buf[index]](buf, index);
+    for (let i = 0; i < count; ++i) {
+        const _ = sul(index, index + gl());
+        index += _.length;
+        answer.push(_);
+    }
+    return answer;
+}
+
+export function shallowDecodeLZ4(buf: Uint8Array, index: number): Uint8Array {
+    const start = index;
+    const firstByte = buf[index++];
+    if (firstByte !== 0xc9)
+        return buf.subarray(start);
+    const sliceLen = get32bit(buf, index) - 5;
+    index += 4;
+    if (buf[index++] !== 0x63)
+        return buf.subarray(start);
+    const vallen = dI32(buf, ++index)[1];
+    index += 4;
+    const value = new Uint8Array(vallen);
+    const sliced = buf.subarray(index, index + sliceLen);
+    lz4_decode(sliced, value, 0, 0, vallen);
+    return value;
+}
+
+export function shallowDecode(buf: Uint8Array, index: number, isSubArray: boolean = true): boolean | number | string | null | Uint8Array | Uint8Array[] | Map<Uint8Array, Uint8Array> | [number, Uint8Array] | never {
+    const firstByte = buf[index];
+    const g = getLength;
+    const gl = () => {
+        const b = buf;
+        const i = index;
+        return g[b[i]](b, i);
+    }
+    const pad = (_num: number) => {
+        return 1 << (firstByte - _num);
+    }
+    const sul = isSubArray ? (_index: number, _length: number) => buf.subarray(_index, _index + _length) : (_index: number, _length: number) => buf.slice(_index, _length);
+    switch (firstByte) {
+        case 0xc0: return null;
+        case 0xc2: return false;
+        case 0xc3: return true;
+        case 0xc4:
+        case 0xc5:
+        case 0xc6: {
+            const _pad = 1 + pad(0xc4);
+            return sul(index + _pad, index + gl() - _pad);
+        }
+        case 0xc7: return [buf[index + 2], sul(index + 3, buf[index + 1])];
+        case 0xc8: return [buf[index + 3], sul(index + 4, get16bit(buf, index + 1))];
+        case 0xc9: return [buf[index + 5], sul(index + 6, get32bit(buf, index + 1))];
+        case 0xca: return sul(index + 1, 4);
+        case 0xcb: return dF64(buf, index + 1)[1];
+        case 0xcc: return buf[index + 1];
+        case 0xcd: return get16bit(buf, index + 1);
+        case 0xce: return get32bit(buf, index + 1);
+        case 0xcf: return sul(index + 1, 8);
+        case 0xd0: return new Int8Array(buf.buffer, index + 1, 1)[0];
+        case 0xd1: return new Int16Array([buf[index + 2], buf[index + 1]])[0];
+        case 0xd2: return new Int32Array([buf[index + 4], buf[index + 3], buf[index + 2], buf[index + 1]])[0];
+        case 0xd3: return sul(index + 1, 8);
+        case 0xd4: return [buf[index + 1], sul(index + 2, 1)];
+        case 0xd5: return [buf[index + 1], sul(index + 2, 2)];
+        case 0xd6: return [buf[index + 1], sul(index + 2, 4)];
+        case 0xd7: return [buf[index + 1], sul(index + 2, 8)];
+        case 0xd8: return [buf[index + 1], sul(index + 2, 16)];
+        case 0xd9: return dString8(buf, index + 1)[1];
+        case 0xda: return dString16(buf, index + 1)[1];
+        case 0xdb: return dString32(buf, index + 1)[1];
+        case 0xdc: return shallowDecodeArray(buf, index + 3, get16bit(buf, index + 1), sul);
+        case 0xdd: return shallowDecodeArray(buf, index + 5, get32bit(buf, index + 1), sul);
+        case 0xde: return shallowDecodeMap(buf, index + 3, get16bit(buf, index + 1), sul);
+        case 0xdf: return shallowDecodeMap(buf, index + 5, get32bit(buf, index + 1), sul);
+    }
+    if (firstByte <= 0x7f) return firstByte;
+    if (firstByte <= 0x8f) return shallowDecodeMap(buf, index + 1, firstByte & 0xf, sul);
+    if (firstByte <= 0x9f) return shallowDecodeArray(buf, index + 1, firstByte & 0xf, sul);
+    if (firstByte <= 0xbf) {
+        const strLen1 = firstByte & 0x1f;
+        let strAns = "";
+        ++index;
+        for (let i = 0; i < strLen1; i += 2)
+            strAns += String.fromCharCode(get16bit(buf, index + i));
+        return strAns;
+    }
+    return firstByte - 256;
+}
+
+export function decode<K, V>(buf: Uint8Array, index: number): returnType {
+    const firstByte = buf[index++];
+    switch (firstByte) {
+        case 0xc0: return [1, null];
+        case 0xc2: return [1, false];
+        case 0xc3: return [1, true];
+        case 0xc4: return [buf[index] + 2, new Uint8Array(buf.buffer, index + 1, buf[index])];
+        case 0xc5: return dBin16(buf, index);
+        case 0xc6: return dBin32(buf, index);
+        case 0xc7: return dExt8(buf, index);
+        case 0xc8: return dExt16(buf, index);
+        case 0xc9: return dExt32(buf, index);
+        case 0xca: return [5, buf.subarray(index, index + 4)];
+        case 0xcb: return dF64(buf, index);
+        case 0xcc: return [2, buf[index]];
+        case 0xcd: return [3, get16bit(buf, index)];
+        case 0xce: return [5, get32bit(buf, index)];
+        case 0xcf: return [9, buf.subarray(index, index + 8)];
+        case 0xd0: return dI8(buf, index);
+        case 0xd1: return dI16(buf, index);
+        case 0xd2: return dI32(buf, index);
+        case 0xd3: return [9, buf.subarray(index, index + 8)];
+        case 0xd4: return [3, [buf[index++], buf.subarray(index, index + 1)]];
+        case 0xd5: return [4, [buf[index++], buf.subarray(index, index + 2)]];
+        case 0xd6:
+            const type1 = buf[index++];
+            if (type1 === 0xff) return dDateShort(buf, index);
+            return [6, [type1, buf.subarray(index, index + 4)]];
+        case 0xd7: return [10, [buf[index++], buf.subarray(index, index + 8)]];
+        case 0xd8: return [18, [buf[index++], buf.subarray(index, index + 16)]];
+        case 0xd9: return dString8(buf, index);
+        case 0xda: return dString16(buf, index);
+        case 0xdb: return dString32(buf, index);
+        case 0xdc: return dA16(buf, index);
+        case 0xdd: return dA32(buf, index);
+        case 0xde: return dM16(buf, index);
+        case 0xdf: return dM32(buf, index);
+    }
+    if (firstByte <= 0x7f) return [1, firstByte];
+    if (firstByte <= 0x8f) {
+        const fixmaplength = firstByte & 0xf;
+        const ansfixmap = new Map<any, any>();
+        let lengthfixmap = 0;
+        for (let i = 0; i < fixmaplength; ++i) {
+            const [_1, _key] = decode(buf, index + lengthfixmap);
+            lengthfixmap += _1;
+            const [_2, _value] = decode(buf, index + lengthfixmap);
+            lengthfixmap += _2;
+            ansfixmap.set(_key, _value);
+        }
+        return [1 + lengthfixmap, ansfixmap];
+    }
+    if (firstByte <= 0x9f) {
+        const arrayfixlength = firstByte & 0xf;
+        const ansfixarray: any[] = [];
+        let lengthfixarray = 0;
+        for (let i = 0; i < arrayfixlength; i++) {
+            const [_, element] = decode(buf, index + lengthfixarray);
+            lengthfixarray += _;
+            ansfixarray.push(element);
+        }
+        return [lengthfixarray + 1, ansfixarray];
+    }
+    if (firstByte <= 0xbf) {
+        const strLen1 = (firstByte & 0x1f);
+        return [1 + strLen1, utf8.decode(buf.subarray(index, (firstByte & 0x1f) + index))];
+    }
+    return [1, firstByte - 256];
+}
