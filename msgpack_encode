@@ -1,0 +1,492 @@
+import { encode as lz4_encode, getMaximumOutputLength } from './lz4.js';
+const _length3 = 65535;
+const _length5 = 4294967295;
+function estimateString(value: string) {
+    const bytelen = utf8.encode(value).length * 2;
+    if (bytelen <= 31) return bytelen + 1;
+    if (bytelen <= 255) return bytelen + 2;
+    if (bytelen <= _length3) return bytelen + 3;
+    if (bytelen <= _length5) return bytelen + 5;
+    return -1;
+}
+interface Encoder<T> { (buf: Uint8Array, index: number, value: T): number }
+export function encodeNull(buf: Uint8Array, index: number): number {
+    if (buf.length < index) return -index;
+    buf[index] = 0xc0;
+    return 1;
+}
+export function encodeNumber(buf: Uint8Array, index: number, value: number): number {
+    const bufrest = buf.length - index;
+    if (value >= -32 && value <= 0x7f) {
+        if (bufrest === 0) return -index;
+        buf[index] = (value & 0xff);
+        return 1;
+    }
+    if (value >= 0) {
+        if (value <= 0xff) {
+            if (bufrest < 2) return -index;
+            buf[index++] = 0xcc;
+            buf[index] = value;
+            return 2;
+        }
+        if (value <= 0xffff) {
+            if (bufrest < 3) return -index;
+            buf[index++] = 0xcd;
+            buf[index++] = value >> 8;
+            buf[index] = value & 0xff;
+            return 3;
+        }
+        if (value <= 0xffffffff) {
+            if (bufrest < 5) return -index;
+            buf[index++] = 0xce;
+            buf[index++] = value >> 24;
+            buf[index++] = value >> 16;
+            buf[index++] = value >> 8;
+            buf[index] = value & 0xff;
+            return 5;
+        }
+    }
+    if (value >= -128) {
+        if (bufrest < 2) return -index;
+        buf[index++] = 0xd0;
+        buf[index] = value;
+        return 2;
+    }
+    if (value >= -32768) {
+        if (bufrest < 3) return -index;
+        buf[index++] = 0xd1;
+        buf[index++] = value >> 8;
+        buf[index] = value;
+        return 3;
+    }
+    if (value >= -2147483648) {
+        if (bufrest < 5) return -index;
+        buf[index++] = 0xd2;
+        buf[index++] = value >> 24;
+        buf[index++] = value >> 16;
+        buf[index++] = value >> 8;
+        buf[index] = value & 0xff;
+        return 5;
+    }
+    return -index;
+}
+export function encodeBoolean(buf: Uint8Array, index: number, value: boolean): number {
+    if (buf.length < index) return -index;
+    buf[index] = value ? 0xc3 : 0xc2;
+    return 1;
+}
+const _static_float64_typed_array = new Float64Array(1);
+const _static_u8_typed_array = new Uint8Array(_static_float64_typed_array.buffer);
+export function encodeFloat64(buf: Uint8Array, index: number, value: number): number {
+    const bufrest = buf.length - index;
+    if (bufrest < 9) return -index;
+    _static_float64_typed_array[0] = value;
+    buf[index++] = 0xcb;
+    buf[index++] = _static_u8_typed_array[7];
+    buf[index++] = _static_u8_typed_array[6];
+    buf[index++] = _static_u8_typed_array[5];
+    buf[index++] = _static_u8_typed_array[4];
+    buf[index++] = _static_u8_typed_array[3];
+    buf[index++] = _static_u8_typed_array[2];
+    buf[index++] = _static_u8_typed_array[1];
+    buf[index++] = _static_u8_typed_array[0];
+    return 9;
+}
+const utf8 = new TextEncoder();
+export function encodeString(buf: Uint8Array, index: number, value: string): number {
+    const encodedBytes = utf8.encode(value);
+    const bytelen = encodedBytes.length;
+    const bufrest = buf.length - index;
+    let ans: number;
+    if (bytelen <= 31) {
+        if (bufrest < (ans = bytelen + 1)) return -index;
+        buf[index++] = 160 + bytelen;
+    }
+    else if (bytelen <= 255) {
+        if (bufrest < (ans = bytelen + 2)) return -index;
+        buf[index++] = 0xd9;
+        buf[index++] = bytelen;
+    }
+    else if (bytelen <= _length3) {
+        if (bufrest < (ans = bytelen + 3)) return -index;
+        buf[index++] = 0xda;
+        buf[index++] = bytelen >> 8;
+        buf[index++] = bytelen;
+    }
+    else if (bytelen <= _length5) {
+        if (bufrest < (ans = bytelen + 5)) return -index;
+        buf[index++] = 0xdb;
+        buf[index++] = bytelen >> 24;
+        buf[index++] = bytelen >> 16;
+        buf[index++] = bytelen >> 8;
+        buf[index++] = bytelen;
+    }
+    else return -index;
+    buf.set(encodedBytes, index);
+    return ans;
+}
+export function encodeUint8Array(buf: Uint8Array, index: number, value: Uint8Array): number {
+    const bytelen = value.length;
+    const bufrest = buf.length - index;
+    let ans: number;
+    if (bytelen <= 255) {
+        if (bufrest < (ans = bytelen + 2)) return -index;
+        buf[index++] = 0xc4;
+        buf[index++] = bytelen;
+    }
+    else if (bytelen <= _length3) {
+        if (bufrest < (ans = bytelen + 3)) return -index;
+        buf[index++] = 0xc5;
+        buf[index++] = bytelen;
+    }
+    else if (bytelen <= _length5) {
+        if (bufrest < (ans = bytelen + 5)) return -index;
+        buf[index++] = 0xc6;
+        buf[index++] = bytelen >> 24;
+        buf[index++] = bytelen >> 16;
+        buf[index++] = bytelen >> 8;
+        buf[index++] = bytelen;
+    }
+    else return -index;
+    buf.set(value, index);
+    return ans;
+}
+export function encodeArray<T>(buf: Uint8Array, index: number, value: ArrayLike<T>, encoder: Encoder<T>): number {
+    const vallen = value.length;
+    const bufrest = buf.length - index;
+    let totalLength;
+    if (vallen <= 15) {
+        if (bufrest < vallen + 1) return -index;
+        buf[index++] = 144 + vallen;
+        totalLength = 1;
+    }
+    else if (vallen <= _length3) {
+        if (bufrest < vallen + 3) return -index;
+        buf[index++] = 0xdc;
+        buf[index++] = vallen >> 8;
+        buf[index++] = vallen;
+        totalLength = 3;
+    }
+    else if (vallen <= _length5) {
+        if (bufrest < vallen + 5) return -index;
+        buf[index++] = 0xdd;
+        buf[index++] = vallen >> 24;
+        buf[index++] = vallen >> 16;
+        buf[index++] = vallen >> 8;
+        buf[index++] = vallen;
+        totalLength = 5;
+    }
+    else return -index;
+    for (let i = 0; i < vallen; i++) {
+        const ans = encoder(buf, index, value[i]);
+        if (ans < 0) return ans;
+        index += ans;
+        totalLength += ans;
+    }
+    return totalLength;
+}
+export function encodeMap<K, V>(buf: Uint8Array, index: number, value: Map<K, V>, encoderK: Encoder<K>, encoderV: Encoder<V>): number {
+    const valsize = value.size;
+    const valsize2 = valsize << 2;
+    const bufrest = buf.length - index;
+    let totalLength;
+    if (valsize <= 15) {
+        if (bufrest < valsize2 + 1) return -index;
+        buf[index++] = 128 + valsize;
+        totalLength = 1;
+    }
+    else if (valsize <= _length3) {
+        if (bufrest < valsize2 + 3) return -index;
+        buf[index++] = 0xde;
+        buf[index++] = valsize >> 8;
+        buf[index++] = valsize;
+        totalLength = 3;
+    }
+    else if (valsize <= _length5) {
+        if (bufrest < valsize2 + 5) return -index;
+        buf[index++] = 0xdf;
+        buf[index++] = valsize >> 24;
+        buf[index++] = valsize >> 16;
+        buf[index++] = valsize >> 8;
+        buf[index++] = valsize;
+        totalLength = 5;
+    }
+    else return -index;
+    for (const [key, val] of value) {
+        const ansK = encoderK(buf, index, key);
+        if (ansK < 0) return ansK;
+        index += ansK;
+        totalLength += ansK;
+        const ansV = encoderV(buf, index, val);
+        if (ansV < 0) return ansV;
+        index += ansV;
+        totalLength += ansV;
+    }
+    return totalLength;
+}
+export function encodeSet<T>(buf: Uint8Array, index: number, value: Set<T>, encoder: Encoder<T>): number {
+    const vallen = value.size;
+    const bufrest = buf.length - index;
+    let totalLength;
+    if (vallen <= 15) {
+        if (bufrest < vallen + 1) return -index;
+        buf[index++] = 144 + vallen;
+        totalLength = 1;
+    }
+    else if (vallen <= _length3) {
+        if (bufrest < vallen + 3) return -index;
+        buf[index++] = 0xdc;
+        buf[index++] = vallen >> 8;
+        buf[index++] = vallen;
+        totalLength = 3;
+    }
+    else if (vallen <= _length5) {
+        if (bufrest < vallen + 5) return -index;
+        buf[index++] = 0xdd;
+        buf[index++] = vallen >> 24;
+        buf[index++] = vallen >> 16;
+        buf[index++] = vallen >> 8;
+        buf[index++] = vallen;
+        totalLength = 5;
+    }
+    else return -index;
+    for (const iterator of value) {
+        const ans = encodeAny(buf, index, iterator);
+        if (ans < 0) return ans;
+        index += ans;
+        totalLength += ans;
+    }
+    return totalLength;
+}
+export function encodeObject(buf: Uint8Array, index: number, value: { [key: string]: any }) {
+    const entries = Object.entries(value);
+    const _index: number[] = [];
+    let _estimateKeyLength: number = 0;
+    const entryLen = entries.length;
+    const startIndex = index;
+    const es = estimateString;
+    for (let i = 0; i < entryLen; i++) {
+        const [_, anyVal] = entries[i];
+        switch (typeof anyVal) {
+            case "symbol":
+            case "function":
+                break;
+            default:
+                _index.push(i);
+                _estimateKeyLength += es(_);
+                break;
+        }
+    }
+    const bufrest = buf.length - index;
+    const _serialLen = _index.length;
+    if (_serialLen <= 15) {
+        if (bufrest < 1 + _estimateKeyLength + _serialLen) return -index;
+        buf[index++] = 128 + _serialLen;
+    }
+    else if (_serialLen <= _length3) {
+        if (bufrest < 3 + _estimateKeyLength + _serialLen) return -index;
+        buf[index++] = 0xde;
+        buf[index++] = _serialLen >> 8;
+        buf[index++] = _serialLen;
+    }
+    else if (_serialLen <= _length5) {
+        if (bufrest < 5 + _estimateKeyLength + _serialLen) return -index;
+        buf[index++] = 0xdf;
+        buf[index++] = _serialLen >> 24;
+        buf[index++] = _serialLen >> 16;
+        buf[index++] = _serialLen >> 8;
+        buf[index++] = _serialLen;
+    }
+    const encS = encodeString;
+    const encA = encodeAny;
+    for (let i = 0; i < _serialLen; i++) {
+        const [key, val] = entries[_index[i]];
+        const ansK = encS(buf, index, key);
+        if (ansK < 0) return ansK;
+        index += ansK;
+        const ansV = encA(buf, index, val);
+        if (ansV < 0) return ansV;
+        index += ansV;
+    }
+    return index - startIndex;
+}
+export function encodeDate(buf: Uint8Array, index: number, value: Date): number {
+    const bufrest = buf.length - index;
+    const milliseconds = value.getTime();
+    const seconds = (milliseconds / 1000) | 0;
+    const nanoseconds = (milliseconds - seconds * 1000) * 1000 * 1000;
+    if (nanoseconds === 0) {
+        if (bufrest < 6) return -1;
+        buf[index++] = 0xd6;
+        buf[index++] = 0xff;
+        buf[index++] = seconds >> 24;
+        buf[index++] = seconds >> 16;
+        buf[index++] = seconds >> 8;
+        buf[index++] = seconds;
+        return 6;
+    }
+    else {
+        if (bufrest < 10) return -1;
+        buf[index++] = 0xd7;
+        buf[index++] = 0xff;
+        buf[index++] = nanoseconds >> 22;
+        buf[index++] = nanoseconds >> 14;
+        buf[index++] = nanoseconds >> 6;
+        buf[index++] = nanoseconds << 2;
+        buf[index++] = seconds >> 24;
+        buf[index++] = seconds >> 16;
+        buf[index++] = seconds >> 8;
+        buf[index++] = seconds;
+        return 10;
+    }
+}
+export function encodeAny(buf: Uint8Array, index: number, value: any): number {
+    switch (typeof value) {
+        case "string": return encodeString(buf, index, value);
+        case "boolean": return encodeBoolean(buf, index, value);
+        case "number": return encodeNumber(buf, index, value);
+        case "undefined": return encodeNull(buf, index);
+        case "function": return 0;
+        case "symbol": return 0;
+        case "object":
+            if (value === null) return encodeNull(buf, index);
+            if (Array.isArray(value)) return encodeArray(buf, index, <any[]>value, encodeAny);
+            if (value instanceof Number) return encodeNumber(buf, index, value.valueOf());
+            if (value instanceof String) return encodeString(buf, index, value.valueOf());
+            if (value instanceof Boolean) return encodeBoolean(buf, index, value.valueOf());
+            if (value instanceof Date) return encodeDate(buf, index, value);
+            if (value instanceof Set) return encodeSet(buf, index, value, encodeAny);
+            if (value instanceof Map) return encodeMap(buf, index, value, encodeAny, encodeAny);
+            return encodeObject(buf, index, value);
+        default: return -index;
+    }
+}
+
+export function encodeExtension(buf: Uint8Array, index: number, typeCode: number, value: Uint8Array) {
+    const vallen = value.length;
+    const bufrest = buf.length - index;
+    switch (vallen) {
+        case 1:
+            if (bufrest < 3) return -index;
+            buf[index++] = 0xd4;
+            buf[index++] = typeCode;
+            buf[index++] = value[0];
+            return index;
+        case 2:
+            if (bufrest < 4) return -index;
+            buf[index++] = 0xd5;
+            buf[index++] = typeCode;
+            buf[index++] = value[0];
+            buf[index++] = value[1];
+            return index;
+        case 4:
+            if (bufrest < 6) return -index;
+            buf[index++] = 0xd6;
+            buf[index++] = typeCode;
+            buf[index++] = value[0];
+            buf[index++] = value[1];
+            buf[index++] = value[2];
+            buf[index++] = value[3];
+            return index;
+        case 8:
+            if (bufrest < 10) return -index;
+            buf[index++] = 0xd7;
+            buf[index++] = typeCode;
+            buf[index++] = value[0];
+            buf[index++] = value[1];
+            buf[index++] = value[2];
+            buf[index++] = value[3];
+            buf[index++] = value[4];
+            buf[index++] = value[5];
+            buf[index++] = value[6];
+            buf[index++] = value[7];
+            return index;
+        case 16:
+            if (bufrest < 18) return -index;
+            buf[index++] = 0xd8;
+            buf[index++] = typeCode;
+            buf[index++] = value[0];
+            buf[index++] = value[1];
+            buf[index++] = value[2];
+            buf[index++] = value[3];
+            buf[index++] = value[4];
+            buf[index++] = value[5];
+            buf[index++] = value[6];
+            buf[index++] = value[7];
+            buf[index++] = value[8];
+            buf[index++] = value[9];
+            buf[index++] = value[10];
+            buf[index++] = value[11];
+            buf[index++] = value[12];
+            buf[index++] = value[13];
+            buf[index++] = value[14];
+            buf[index++] = value[15];
+            return index;
+    }
+    if (vallen <= 255) {
+        if (bufrest < vallen + 3) return -index;
+        buf[index++] = 0xc7;
+        buf[index++] = vallen;
+        buf[index++] = typeCode;
+        buf.set(value, index);
+        return index + vallen;
+    }
+    else if (vallen <= _length3) {
+        if (bufrest < vallen + 4) return -index;
+        buf[index++] = 0xc8;
+        buf[index++] = vallen >> 8;
+        buf[index++] = vallen;
+        buf[index++] = typeCode;
+        buf.set(value, index);
+        return index + vallen;
+    }
+    else if (vallen <= _length5) {
+        if (bufrest < vallen + 6) return -index;
+        buf[index++] = 0x9;
+        buf[index++] = vallen >> 24;
+        buf[index++] = vallen >> 16;
+        buf[index++] = vallen >> 8;
+        buf[index++] = vallen;
+        buf[index++] = typeCode;
+        buf.set(value, index);
+        return index + vallen;
+    }
+    else return -index;
+}
+
+
+
+export function encodeLZ4Raw(buf: Uint8Array, value: Uint8Array): number {
+    const bufrest = buf.length;
+    const vallen = value.length;
+    if (vallen <= 64) {
+        if (bufrest < vallen) return -1;
+        buf.set(value);
+        return vallen;
+    }
+    const outputMaximum = getMaximumOutputLength(vallen);
+    const compression = new Uint8Array(outputMaximum);
+    const sliceLen = lz4_encode(value, 0, vallen, compression, 0, outputMaximum);
+    if (sliceLen + 11 >= vallen) {
+        if (bufrest < vallen) return -1;
+        buf.set(value);
+        return vallen;
+    }
+    const extLen = 5 + sliceLen;
+    const sliced = compression.subarray(0, sliceLen);
+    let index = 0;
+    if (bufrest < extLen + 6) return -1;
+    buf[index++] = 0xc9;
+    buf[index++] = extLen >> 24;
+    buf[index++] = extLen >> 16;
+    buf[index++] = extLen >> 8;
+    buf[index++] = extLen;
+    buf[index++] = 0x63;
+    buf[index++] = 0xd2;
+    buf[index++] = vallen >> 24;
+    buf[index++] = vallen >> 16;
+    buf[index++] = vallen >> 8;
+    buf[index++] = vallen;
+    buf.set(sliced, index);
+    return index + sliceLen;
+}
